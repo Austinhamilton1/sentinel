@@ -37,6 +37,11 @@ struct filenode *init_filenode(char *filename) {
 	//copy data to filenode struct
 	node->last_modify_time = st_info.st_mtime;
 	node->size = st_info.st_size;
+	if(S_ISREG(st_info.st_mode))
+		node->type = FILE_TYPE_FILE;
+	else if(S_ISDIR(st_info.st_mode))
+		node->type = FILE_TYPE_DIR;	
+	node->next = 0;
 
 	//cleanup
 	close(fd);
@@ -64,13 +69,14 @@ struct cache *init_cache(size_t initial_capacity) {
 	//initialize cache
 	cache->capacity = initial_capacity;
 	cache->values = (struct filenode **)malloc(initial_capacity * sizeof(struct filenode *));
-
-	//used so we can check if the table is empty
-	memset(cache->values, 0, initial_capacity * sizeof(struct filenode *));
-
+	
 	//check if hash table malloc didn't work
 	if(cache->values == 0)
 		free(cache);
+	
+	//used so we can check if the table is empty
+	for(size_t i = 0; i < initial_capacity; i++)
+		cache->values[i] = 0;
 
 	return cache;
 }

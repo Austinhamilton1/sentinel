@@ -8,12 +8,12 @@ LIBS=$(patsubst $(LIB)/lib%.a, -l%, $(wildcard $(LIB)/*.a))
 OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(wildcard $(SRC)/*.c)) 
 
 CC=gcc
-CFLAGS=-I$(INC) -Wall -O3
+CFLAGS=-I$(INC) -Wall -O3 -g
 LDFLAGS=-L$(LIB) $(LIBS)
 
 .PHONY: all clean install
 
-all: $(BIN)/sentinel
+all: clean $(BIN)/sentinel
 
 $(BIN)/sentinel: $(OBJS) | $(BIN)
 	$(CC) $(CFLAGS) -o $@ $? $(LDFLAGS)

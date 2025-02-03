@@ -18,4 +18,15 @@ size_t mod_exp(size_t base, size_t exp, size_t mod);
  */
 void filename(char *result, char *path, size_t maxlen);
 
+/*
+ * Copy the file stored at the r_fd file descriptor to the file
+ * stored at the w_fd descriptor
+ */
+int copy(int w_fd, int r_fd, int bufsize);
+
+/*
+ * Remove a file or directory recursively
+ */
+int rm(char *path);
+
 #endif

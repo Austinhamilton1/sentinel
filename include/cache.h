@@ -3,10 +3,16 @@
 
 #include <stddef.h>
 
+enum filetype {
+	FILE_TYPE_FILE,
+	FILE_TYPE_DIR,
+};
+
 //indexes a file for determining changes
 struct filenode {
 	char			*filename; //file's path name
 	long 			last_modify_time, size; //metadata
+	enum filetype	type; //file or directory
 	struct filenode *next; //used to resolve hashing collisions
 };
 

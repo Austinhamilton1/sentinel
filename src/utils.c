@@ -1,3 +1,9 @@
+#include <unistd.h>
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "utils.h"
 
 void join(char *dest, char *src1, char *src2, size_t maxlen) {
@@ -55,4 +61,60 @@ void filename(char *result, char *path, size_t maxlen) {
 	i = 0;
 	for(char *src = path + last_slash + 1; *src != 0 && i < maxlen; src++, i++)
 		*dest++ = *src;
+}
+
+int copy(int w_fd, int r_fd, int bufsize) {
+	char buf[bufsize];
+	memset(buf, 0, bufsize);
+
+	ssize_t chunk;
+	while((chunk = read(r_fd, buf, bufsize)) > 0) {
+		if(write(w_fd, buf, chunk) != chunk)
+			return -1;
+	}
+
+	return 0;
+}
+
+int rm(char *path) {
+	int fd, st_res;
+	struct stat st_info;
+
+	if((fd = open(path, O_RDONLY)) < 0)
+		return -1;
+	
+	if((st_res = fstat(fd, &st_info)) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	//no longer needed
+	close(fd);
+	
+	if(S_ISDIR(st_info.st_mode)) {
+		DIR *dp;
+		struct dirent *ep;
+
+		dp = opendir(path);
+		if(dp != 0) {
+			while((ep = readdir(dp)) != 0) {
+				//get the full path
+				char buf[4096];
+				memset(buf, 0, 4096);
+				join(buf, path, ep->d_name, 4095);
+
+				//try to sync the directory recursively,
+				//if it fails, fail all the way up
+				if(rm(buf) < 0) {
+					closedir(dp);
+					return -1;
+				}
+			}
+			closedir(dp);
+		}
+
+		return rmdir(path);
+	}
+
+	return unlink(path);
 }
