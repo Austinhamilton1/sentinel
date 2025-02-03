@@ -8,7 +8,7 @@ The sentinel package is an application for developers. It allows for a more seam
 * Create makefile(s)
     * Build
     * Install
-* Create way to store state of source code
+* ~~Create way to store state of source code~~
 * Create main event loop
 * Create way to connect to remote destination
     * Different Folders
