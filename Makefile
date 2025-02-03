@@ -5,6 +5,7 @@ OBJ=obj
 BIN=bin
 
 LIBS=$(patsubst $(LIB)/lib%.a, -l%, $(wildcard $(LIB)/*.a))
+OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(wildcard $(SRC)/*.c)) 
 
 CC=gcc
 CFLAGS=-I$(INC) -Wall -O3
@@ -14,11 +15,17 @@ LDFLAGS=-L$(LIB) $(LIBS)
 
 all: $(BIN)/sentinel
 
-$(BIN)/sentinel: $(OBJ)/main.o | $(BIN)
+$(BIN)/sentinel: $(OBJS) | $(BIN)
 	$(CC) $(CFLAGS) -o $@ $? $(LDFLAGS)
 
 $(OBJ)/main.o: $(SRC)/main.c | $(OBJ)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -o $@ $< 
+
+$(OBJ)/utils.o: $(SRC)/utils.c | $(OBJ)
+	$(CC) $(CFLAGS) -c -o $@ $< 
+	
+$(OBJ)/cache.o: $(SRC)/cache.c | $(OBJ)
+	$(CC) $(CFLAGS) -c -o $@ $< 
 
 $(OBJ):
 	mkdir -p $@
