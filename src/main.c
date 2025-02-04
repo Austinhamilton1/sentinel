@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
+#include "list.h"
 #include "utils.h"
 
 /*
@@ -27,7 +28,7 @@ int update_cache(struct cache *cache, char *path);
 /*
  * Remove all files from the cache that no longer exist
  */
-void clean_cache(struct cache *cache);
+void clean_cache(struct cache *cache, struct list *list);
 
 /*
  * Migrate a src to a destination on the same physical filesystem
@@ -37,7 +38,7 @@ int migrate_phy(char *src, char *dest);
 /*
  * Synchronize two folders on the same physical filesystem
  */
-int sync_phy(struct cache *cache, char *src, char *dest);
+int sync_phy(struct cache *cache, struct list *list, char *src, char *dest);
 
 /*
  * Frees all used memory and file descriptors
@@ -54,6 +55,7 @@ void handle_signal(int sig);
 void print_filenode(struct filenode *filenode);
 
 struct cache *cache = 0;
+struct list *list = 0;
 int r_fd, w_fd = -1;
 
 int main(int argc, char *argv[]) {
@@ -87,12 +89,19 @@ int main(int argc, char *argv[]) {
 	printf("OK.\n");
 	
 	while(1) {
-		clean_cache(cache);
+		list = init_list(400);
+		if(list == 0) {
+			fprintf(stderr, "Couldn't create list.\n");
+			cleanup();
+			return -1;
+		}
+		clean_cache(cache, list);
 		if(update_cache(cache, argv[1]) < 0)
 			fprintf(stderr, "Update failed.\n");
 		sleep(1);
-		if(sync_phy(cache, argv[1], argv[2]) < 0)
+		if(sync_phy(cache, list, argv[1], argv[2]) < 0)
 			fprintf(stderr, "Sync failed.\n");
+		free_list(list);
 	}
 
 	return 0;
@@ -163,7 +172,7 @@ int build_cache(struct cache *cache, char *path) {
 	return 0; 
 }
 
-void clean_cache(struct cache *cache) {
+void clean_cache(struct cache *cache, struct list *list) {
 	if(cache == 0 || cache->values == 0)
 		return;
 
@@ -178,6 +187,9 @@ void clean_cache(struct cache *cache) {
 			//delete the filenode entry if the file doesn't exist
 			if(access(ptr->filename, F_OK) != 0) {
 				printf("File deleted: %s\n", ptr->filename);
+
+				append(list, ptr->filename);
+
 				struct filenode *tmp = ptr->next;
 
 				//first entry
@@ -377,7 +389,7 @@ int migrate_phy(char *src, char *dest) {
 	return 0;
 }
 
-int sync_phy(struct cache *cache, char *src, char *dest) {
+int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 	int st_res;
 	struct stat st_info;
 
@@ -391,65 +403,71 @@ int sync_phy(struct cache *cache, char *src, char *dest) {
 
 	struct filenode *filenode = get(cache, src);
 
-	//file is new or has been deleted
-	if(filenode == 0) {
-		//check if the file has been deleted
-		int exists = access(src, F_OK);
+	//delete any deleted files
+	for(size_t i = 0; i < list->length; i++) {
+		//get the file name
+		char buf[4096];
+		memset(buf, 0, 4096);
+		fetch(list, buf, i, 4095);
 
-		if(exists < 0) { //this does not work
+		printf("Deleted file at index %ld: %s\n", i, buf);
+		printf("src:  %s\n", src);
+
+		//if the src is in the list of deleted files, delete the dest
+		if(strcmp(buf, src) == 0) {
 			if(rm(dest) < 0) {
 				fprintf(stderr, "Error in physical sync - Couldn't delete file: %s\n", dest);
 				return -1;
 			}
 			printf("Deleted file: %s\n", dest);
 		}
-		//file is new
-		else {
+	}
+
+	//file is new
+	if(filenode == 0) { //This works!
+		if((r_fd = open(src, O_RDONLY)) < 0) {
+			fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
+			return -1;
+		}
+		
+		if((st_res = fstat(r_fd, &st_info)) < 0) {
+			fprintf(stderr, "Error in physical sync - Couldn't stat file: %s\n", src);
+			close(r_fd);
+			return -1;
+		}
+
+		//close before recursion
+		close(r_fd);
+
+		if(S_ISDIR(st_info.st_mode)) { //this works!
+			if(mkdir(dest, st_info.st_mode) < 0) {
+				fprintf(stderr, "Error in physical sync - Couldn't make directory: %s\n", dest);
+				return -1;
+			}
+			printf("Created directory: %s\n", dest);
+		}
+		else if(S_ISREG(st_info.st_mode)) { //this works!
 			if((r_fd = open(src, O_RDONLY)) < 0) {
 				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
 				return -1;
 			}
-			
-			if((st_res = fstat(r_fd, &st_info)) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't stat file: %s\n", src);
+			if((w_fd = open(dest, O_WRONLY | O_CREAT, st_info.st_mode)) < 0) {
+				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", dest);
 				close(r_fd);
 				return -1;
 			}
 
-			//close before recursion
-			close(r_fd);
-
-			if(S_ISDIR(st_info.st_mode)) { //this does not work
-				printf("Directory\n");
-				if(mkdir(dest, st_info.st_mode) < 0) {
-					fprintf(stderr, "Error in physical sync - Couldn't make directory: %s\n", dest);
-					return -1;
-				}
-				printf("Created directory: %s\n", dest);
-			}
-			else if(S_ISREG(st_info.st_mode)) { //this works!
-				if((r_fd = open(src, O_RDONLY)) < 0) {
-					fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
-					return -1;
-				}
-				if((w_fd = open(dest, O_WRONLY | O_CREAT, st_info.st_mode)) < 0) {
-					fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", dest);
-					close(r_fd);
-					return -1;
-				}
-
-				//copy file 256 bytes at a time, checking for errors
-				if(copy(w_fd, r_fd, 256) < 0) {
-					fprintf(stderr, "Error in physical sync - Couldn't copy files: %s -> %s\n", src, dest);
-					close(r_fd);
-					close(w_fd);
-					return -1;
-				}
+			//copy file 256 bytes at a time, checking for errors
+			if(copy(w_fd, r_fd, 256) < 0) {
+				fprintf(stderr, "Error in physical sync - Couldn't copy files: %s -> %s\n", src, dest);
 				close(r_fd);
 				close(w_fd);
-
-				printf("Created file: %s\n", dest);
+				return -1;
 			}
+			close(r_fd);
+			close(w_fd);
+
+			printf("Created file: %s\n", dest);
 		}
 	}
 	//file already exists (check for potential change)
@@ -506,7 +524,7 @@ int sync_phy(struct cache *cache, char *src, char *dest) {
 
 				//try to sync the directory recursively,
 				//if it fails, fail all the way up
-				if(sync_phy(cache, srcbuf, destbuf) < 0) {
+				if(sync_phy(cache, list, srcbuf, destbuf) < 0) {
 					closedir(dp);
 					return -1;
 				}
@@ -524,6 +542,7 @@ void cleanup() {
 
 	//free up allocated memory
 	free_cache(cache);
+	free_list(list);
 
 	//close read file descriptor
 	if(r_fd != -1 && fcntl(r_fd, F_GETFL) >= 0)	

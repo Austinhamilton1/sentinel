@@ -27,6 +27,9 @@ $(OBJ)/utils.o: $(SRC)/utils.c | $(OBJ)
 $(OBJ)/cache.o: $(SRC)/cache.c | $(OBJ)
 	$(CC) $(CFLAGS) -c -o $@ $< 
 
+$(OBJ)/list.o: $(SRC)/list.c | $(OBJ)
+	$(CC) $(CFLAGS) -c -o $@ $< 
+
 $(OBJ):
 	mkdir -p $@
 
