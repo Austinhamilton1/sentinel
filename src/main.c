@@ -36,9 +36,14 @@ void clean_cache(struct cache *cache, struct list *list);
 int migrate_phy(char *src, char *dest);
 
 /*
+ * Delete any files on dest that were deleted in src
+ */
+int delete_phy(struct list *list, char *src, char *dest);
+
+/*
  * Synchronize two folders on the same physical filesystem
  */
-int sync_phy(struct cache *cache, struct list *list, char *src, char *dest);
+int sync_phy(struct cache *cache, char *src, char *dest);
 
 /*
  * Frees all used memory and file descriptors
@@ -67,8 +72,9 @@ int main(int argc, char *argv[]) {
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 
-	//initialize a cache with a capacity of 400
+	//initialize a cache and a list with a capacity of 400
 	cache = init_cache(400);
+	list = init_list(400);
 
 	printf("Building cache...");
 	//try to build the cache
@@ -89,19 +95,15 @@ int main(int argc, char *argv[]) {
 	printf("OK.\n");
 	
 	while(1) {
-		list = init_list(400);
-		if(list == 0) {
-			fprintf(stderr, "Couldn't create list.\n");
-			cleanup();
-			return -1;
-		}
 		clean_cache(cache, list);
 		if(update_cache(cache, argv[1]) < 0)
 			fprintf(stderr, "Update failed.\n");
 		sleep(1);
-		if(sync_phy(cache, list, argv[1], argv[2]) < 0)
+		if(sync_phy(cache, argv[1], argv[2]) < 0)
 			fprintf(stderr, "Sync failed.\n");
-		free_list(list);
+		if(delete_phy(list, argv[1], argv[2]) < 0)
+			fprintf(stderr, "Delete failed.\n");
+		clear(list);
 	}
 
 	return 0;
@@ -186,8 +188,6 @@ void clean_cache(struct cache *cache, struct list *list) {
 		while(ptr != 0) {
 			//delete the filenode entry if the file doesn't exist
 			if(access(ptr->filename, F_OK) != 0) {
-				printf("File deleted: %s\n", ptr->filename);
-
 				append(list, ptr->filename);
 
 				struct filenode *tmp = ptr->next;
@@ -244,7 +244,6 @@ int update_cache(struct cache *cache, char *path) {
 
 		//check to see if the entry needs to be updated
 		if(st_info.st_mtime != filenode->last_modify_time || st_info.st_size != filenode->size) {
-			printf("File updated: %s\n", path);
 			filenode->last_modify_time = st_info.st_mtime;
 			filenode->size = st_info.st_size;
 		}
@@ -257,7 +256,6 @@ int update_cache(struct cache *cache, char *path) {
 			fprintf(stderr, "Error in updating cache - Couldn't insert file: %s\n", path);
 			return -1;
 		}
-		printf("File created: %s\n", path);
 	}
 	
 	//we need to also recursively update
@@ -389,7 +387,35 @@ int migrate_phy(char *src, char *dest) {
 	return 0;
 }
 
-int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
+int delete_phy(struct list *list, char *src, char *dest) {
+	//sort list based on length
+	sortlen(list);
+	int success = 0;
+
+	//loop through the list looking at longer filenames first
+	//this will ensure subfiles and subdirectories
+	//get deleted before parent directories
+	for(size_t i = 0; i < list->length; i++) {
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, list->values[i], src, 4095);
+
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
+
+		//delete the file from the destination
+		if(rm(full_filename) < 0) {
+			fprintf(stderr, "Error in physical delete - Couldn't remove file: %s\n", full_filename);
+			success = -1;
+		}
+	}
+	return success;
+}
+
+int sync_phy(struct cache *cache, char *src, char *dest) {
 	int st_res;
 	struct stat st_info;
 
@@ -403,28 +429,8 @@ int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 
 	struct filenode *filenode = get(cache, src);
 
-	//delete any deleted files
-	for(size_t i = 0; i < list->length; i++) {
-		//get the file name
-		char buf[4096];
-		memset(buf, 0, 4096);
-		fetch(list, buf, i, 4095);
-
-		printf("Deleted file at index %ld: %s\n", i, buf);
-		printf("src:  %s\n", src);
-
-		//if the src is in the list of deleted files, delete the dest
-		if(strcmp(buf, src) == 0) {
-			if(rm(dest) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't delete file: %s\n", dest);
-				return -1;
-			}
-			printf("Deleted file: %s\n", dest);
-		}
-	}
-
 	//file is new
-	if(filenode == 0) { //This works!
+	if(filenode == 0) {
 		if((r_fd = open(src, O_RDONLY)) < 0) {
 			fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
 			return -1;
@@ -439,14 +445,13 @@ int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 		//close before recursion
 		close(r_fd);
 
-		if(S_ISDIR(st_info.st_mode)) { //this works!
+		if(S_ISDIR(st_info.st_mode)) {
 			if(mkdir(dest, st_info.st_mode) < 0) {
 				fprintf(stderr, "Error in physical sync - Couldn't make directory: %s\n", dest);
 				return -1;
 			}
-			printf("Created directory: %s\n", dest);
 		}
-		else if(S_ISREG(st_info.st_mode)) { //this works!
+		else if(S_ISREG(st_info.st_mode)) {
 			if((r_fd = open(src, O_RDONLY)) < 0) {
 				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
 				return -1;
@@ -466,8 +471,6 @@ int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 			}
 			close(r_fd);
 			close(w_fd);
-
-			printf("Created file: %s\n", dest);
 		}
 	}
 	//file already exists (check for potential change)
@@ -504,6 +507,8 @@ int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 				close(w_fd);
 				return -1;
 			}
+			close(r_fd);
+			close(w_fd);
 		}
 	}
 
@@ -524,7 +529,7 @@ int sync_phy(struct cache *cache, struct list *list, char *src, char *dest) {
 
 				//try to sync the directory recursively,
 				//if it fails, fail all the way up
-				if(sync_phy(cache, list, srcbuf, destbuf) < 0) {
+				if(sync_phy(cache, srcbuf, destbuf) < 0) {
 					closedir(dp);
 					return -1;
 				}

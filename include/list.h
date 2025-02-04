@@ -33,4 +33,9 @@ int append(struct list *list, char *src);
  */
 void clear(struct list *list);
 
+/*
+ * Sort a list by the length of its contents
+ */
+void sortlen(struct list *list);
+
 #endif

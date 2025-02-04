@@ -8,7 +8,7 @@ LIBS=$(patsubst $(LIB)/lib%.a, -l%, $(wildcard $(LIB)/*.a))
 OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(wildcard $(SRC)/*.c)) 
 
 CC=gcc
-CFLAGS=-I$(INC) -Wall -O3 -g
+CFLAGS=-I$(INC) -Wall -g
 LDFLAGS=-L$(LIB) $(LIBS)
 
 .PHONY: all clean install

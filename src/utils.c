@@ -63,6 +63,22 @@ void filename(char *result, char *path, size_t maxlen) {
 		*dest++ = *src;
 }
 
+void relative(char *result, char *path, char *parent, size_t maxlen) {
+	//index of the last character that matches in path and parent
+	size_t i, j;
+	i = 0;
+	for(char *ptr = parent; *ptr != 0; ptr++)
+		i++;
+
+	if(path[i] == '/')
+		i++;
+	
+	char *dest = result;
+	j = 0;
+	for(char *src = path + i; *src != 0 && j < maxlen; src++, j++)
+		*dest++ = *src;
+}
+
 int copy(int w_fd, int r_fd, int bufsize) {
 	char buf[bufsize];
 	memset(buf, 0, bufsize);
@@ -91,30 +107,8 @@ int rm(char *path) {
 	//no longer needed
 	close(fd);
 	
-	if(S_ISDIR(st_info.st_mode)) {
-		DIR *dp;
-		struct dirent *ep;
-
-		dp = opendir(path);
-		if(dp != 0) {
-			while((ep = readdir(dp)) != 0) {
-				//get the full path
-				char buf[4096];
-				memset(buf, 0, 4096);
-				join(buf, path, ep->d_name, 4095);
-
-				//try to sync the directory recursively,
-				//if it fails, fail all the way up
-				if(rm(buf) < 0) {
-					closedir(dp);
-					return -1;
-				}
-			}
-			closedir(dp);
-		}
-
+	if(S_ISDIR(st_info.st_mode)) 
 		return rmdir(path);
-	}
 
 	return unlink(path);
 }
