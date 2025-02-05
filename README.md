@@ -4,10 +4,11 @@ The sentinel package is an application for developers. It allows for a more seam
 
 # TODO
 * ~~Design dev folder structure~~
-* Create configuration script 
-* Create makefile(s)
-    * Build
-    * Install
+* ~~Create configuration script~~ 
+* ~~Create makefile(s)~~
+    * ~~Build~~
+    * ~~Install~~
+	* ~~Uninstall~~
 * ~~Create way to store state of source code~~
 * ~~Create main event loop~~
 * Create way to determine which type of connection

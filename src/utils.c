@@ -112,3 +112,45 @@ int rm(char *path) {
 
 	return unlink(path);
 }
+
+int ascending(char *a, char *b) {
+	char *ptr1, *ptr2;
+
+	ptr1 = a;
+	ptr2 = b;
+	while(*ptr1 == *ptr2) {
+		if(*ptr1 == 0)
+			return 0;
+		ptr1++;
+		ptr2++;
+	}
+
+	if(*ptr1 == 0)
+		return -1;
+	if(*ptr2 == 0)
+		return 1;
+	if(*ptr1 < *ptr2)
+		return -1;
+	return 1;
+}
+
+int descending(char *a, char *b) {
+	char *ptr1, *ptr2;
+
+	ptr1 = a;
+	ptr2 = b;
+	while(*ptr1 == *ptr2) {
+		if(*ptr1 == 0)
+			return 0;
+		ptr1++;
+		ptr2++;
+	}
+
+	if(*ptr1 == 0)
+		return 1;
+	if(*ptr2 == 0)
+		return -1;
+	if(*ptr1 > *ptr2)
+		return -1;
+	return 1;
+}

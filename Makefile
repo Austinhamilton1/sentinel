@@ -1,3 +1,5 @@
+include .config.mk
+
 SRC=src
 INC=include
 LIB=lib
@@ -7,11 +9,10 @@ BIN=bin
 LIBS=$(patsubst $(LIB)/lib%.a, -l%, $(wildcard $(LIB)/*.a))
 OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(wildcard $(SRC)/*.c)) 
 
-CC=gcc
 CFLAGS=-I$(INC) -Wall -g
 LDFLAGS=-L$(LIB) $(LIBS)
 
-.PHONY: all clean install
+.PHONY: all clean install uninstall
 
 all: clean $(BIN)/sentinel
 
@@ -39,3 +40,9 @@ $(BIN):
 clean:
 	rm -rf $(OBJ)
 	rm -rf $(BIN)
+
+install:
+	cp $(BIN)/sentinel $(PREFIX)/sentinel
+
+uninstall:
+	rm $(PREFIX)/sentinel

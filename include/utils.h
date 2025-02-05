@@ -34,4 +34,14 @@ int copy(int w_fd, int r_fd, int bufsize);
  */
 int rm(char *path);
 
+/*
+ * Compare two strings in ascending order
+ */
+int ascending(char *a, char *b);
+
+/*
+ * Compare two strings in descending order
+ */
+int descending(char *a, char *b);
+
 #endif

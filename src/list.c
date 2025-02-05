@@ -96,17 +96,17 @@ void clear(struct list *list) {
 /*
  * Merge two list for merge sort
  */
-static void merge(struct list *list, size_t start, size_t mid, size_t end) {
+static void merge(struct list *list, size_t start, size_t mid, size_t end, int (*compare)(char *, char*)) {
     size_t start2 = mid + 1;
 
     //if the direct merge is already sorted
-    if(strlen(list->values[mid]) >= strlen(list->values[start2]))
+    if(compare(list->values[mid], list->values[start2]) <= 0)
         return; 
 
     //two pointers to maintain start of both arrays to merge
     while(start <= mid && start2 <= end) {
         //element 1 is in the right place
-        if(strlen(list->values[start]) >= strlen(list->values[start2]))
+        if(compare(list->values[start], list->values[start2]) <= 0)
             start++;
         else {
             char *value = list->values[start2];
@@ -131,20 +131,20 @@ static void merge(struct list *list, size_t start, size_t mid, size_t end) {
 /*
  * Merge sort algorithm
  */
-static void mergesort(struct list *list, size_t l, size_t r) {
+static void mergesort(struct list *list, size_t l, size_t r, int (*compare)(char *, char *)) {
     if(l < r) {
         size_t m = l + (r-l) / 2;
         //merge first and second halves
-        mergesort(list, l, m);
-        mergesort(list, m+1, r);
+        mergesort(list, l, m, compare);
+        mergesort(list, m+1, r, compare);
 
-        merge(list, l, m, r);
+        merge(list, l, m, r, compare);
     }
 }
 
-void sortlen(struct list *list) {
+void sortlen(struct list *list, int (*compare)(char *, char *)) {
     //check if the list is null
     if(list == 0 || list->values == 0 || list->length < 2)
         return;
-    mergesort(list, 0, list->length-1);
+    mergesort(list, 0, list->length-1, compare);
 }

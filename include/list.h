@@ -36,6 +36,6 @@ void clear(struct list *list);
 /*
  * Sort a list by the length of its contents
  */
-void sortlen(struct list *list);
+void sortlen(struct list *list, int (*compare)(char *a, char *b));
 
 #endif

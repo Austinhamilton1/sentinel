@@ -16,19 +16,19 @@
  * If the path is a directory add all subfiles
  * and subdirectories to the cache recursively
  */
-int build_cache(struct cache *cache, char *path);
+int build_cache(char *path);
 
 /*
  * Update the cache from a path
  * Remove all deleted files, add any new files, update metadata of existing
  * files
  */
-int update_cache(struct cache *cache, char *path);
+int update_cache(char *path);
 
 /*
  * Remove all files from the cache that no longer exist
  */
-void clean_cache(struct cache *cache, struct list *list);
+void clean_cache();
 
 /*
  * Migrate a src to a destination on the same physical filesystem
@@ -38,12 +38,12 @@ int migrate_phy(char *src, char *dest);
 /*
  * Delete any files on dest that were deleted in src
  */
-int delete_phy(struct list *list, char *src, char *dest);
+int delete_phy(char *src, char *dest);
 
 /*
  * Synchronize two folders on the same physical filesystem
  */
-int sync_phy(struct cache *cache, char *src, char *dest);
+int sync_phy(char *src, char *dest);
 
 /*
  * Frees all used memory and file descriptors
@@ -56,11 +56,10 @@ void cleanup();
  */
 void handle_signal(int sig);
 
-//Just for debugging. Remove this after production
-void print_filenode(struct filenode *filenode);
-
 struct cache *cache = 0;
-struct list *list = 0;
+struct list *insert_list = 0;
+struct list *delete_list = 0;
+struct list *update_list = 0;
 int r_fd, w_fd = -1;
 
 int main(int argc, char *argv[]) {
@@ -72,13 +71,15 @@ int main(int argc, char *argv[]) {
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 
-	//initialize a cache and a list with a capacity of 400
+	//initialize a cache and a 3 lists with a capacity of 400
 	cache = init_cache(400);
-	list = init_list(400);
+	insert_list = init_list(400);
+	delete_list = init_list(400);
+	update_list = init_list(400);
 
 	printf("Building cache...");
 	//try to build the cache
-	if(build_cache(cache, argv[1]) < 0) {
+	if(build_cache(argv[1]) < 0) {
 		printf("Failed.\n");
 		cleanup();
 		return -1;
@@ -95,21 +96,21 @@ int main(int argc, char *argv[]) {
 	printf("OK.\n");
 	
 	while(1) {
-		clean_cache(cache, list);
-		if(update_cache(cache, argv[1]) < 0)
+		clean_cache();
+		if(update_cache(argv[1]) < 0)
 			fprintf(stderr, "Update failed.\n");
 		sleep(1);
-		if(sync_phy(cache, argv[1], argv[2]) < 0)
+		if(sync_phy(argv[1], argv[2]) < 0)
 			fprintf(stderr, "Sync failed.\n");
-		if(delete_phy(list, argv[1], argv[2]) < 0)
-			fprintf(stderr, "Delete failed.\n");
-		clear(list);
+		clear(insert_list);
+		clear(delete_list);
+		clear(update_list);
 	}
 
 	return 0;
 }
 
-int build_cache(struct cache *cache, char *path) {
+int build_cache(char *path) {
 	int insert_result, st_res;
 	struct stat st_info;
 
@@ -161,7 +162,7 @@ int build_cache(struct cache *cache, char *path) {
 
 				//if any of the build_dir calls fail, fail all
 				//the way up
-				if(build_cache(cache, buf) < 0) {
+				if(build_cache(buf) < 0) {
 					closedir(dp);
 					return -1;
 				}
@@ -174,7 +175,7 @@ int build_cache(struct cache *cache, char *path) {
 	return 0; 
 }
 
-void clean_cache(struct cache *cache, struct list *list) {
+void clean_cache() {
 	if(cache == 0 || cache->values == 0)
 		return;
 
@@ -188,7 +189,7 @@ void clean_cache(struct cache *cache, struct list *list) {
 		while(ptr != 0) {
 			//delete the filenode entry if the file doesn't exist
 			if(access(ptr->filename, F_OK) != 0) {
-				append(list, ptr->filename);
+				append(delete_list, ptr->filename);
 
 				struct filenode *tmp = ptr->next;
 
@@ -212,7 +213,7 @@ void clean_cache(struct cache *cache, struct list *list) {
 	}
 }
 
-int update_cache(struct cache *cache, char *path) {
+int update_cache(char *path) {
 	int st_res;
 	struct stat st_info;
 
@@ -241,19 +242,27 @@ int update_cache(struct cache *cache, char *path) {
 			close(r_fd);
 			return -1;
 		}
+		//no longer needed
+		close(r_fd);
 
 		//check to see if the entry needs to be updated
 		if(st_info.st_mtime != filenode->last_modify_time || st_info.st_size != filenode->size) {
 			filenode->last_modify_time = st_info.st_mtime;
 			filenode->size = st_info.st_size;
+			if(S_ISREG(st_info.st_mode) && append(update_list, path) < 0) {
+				fprintf(stderr, "Error in updating update list - Couldn't insert file: %s\n", path);
+				return -1;
+			}
 		}
-
-		close(r_fd);
 	}
 	else {
 		//insert the file into the cache
 		if(insert(cache, path) < 0) {
 			fprintf(stderr, "Error in updating cache - Couldn't insert file: %s\n", path);
+			return -1;
+		}
+		if(append(insert_list, path) < 0) {
+			fprintf(stderr, "Error in updating update list - Could't insert file: %s\n", path);
 			return -1;
 		}
 	}
@@ -292,7 +301,7 @@ int update_cache(struct cache *cache, char *path) {
 
 				//try to update the cache recursively,
 				//if it fails, fail all the way up
-				if(update_cache(cache, buf) < 0) {
+				if(update_cache(buf) < 0) {
 					closedir(dp);
 					return -1;
 				}
@@ -387,19 +396,20 @@ int migrate_phy(char *src, char *dest) {
 	return 0;
 }
 
-int delete_phy(struct list *list, char *src, char *dest) {
-	//sort list based on length
-	sortlen(list);
+int delete_phy(char *src, char *dest) {
 	int success = 0;
+
+	//sort list based on length
+	sortlen(delete_list, descending);
 
 	//loop through the list looking at longer filenames first
 	//this will ensure subfiles and subdirectories
 	//get deleted before parent directories
-	for(size_t i = 0; i < list->length; i++) {
+	for(size_t i = 0; i < delete_list->length; i++) {
 		//get the relative file name
 		char relative_filename[4096];
 		memset(relative_filename, 0, 4096);
-		relative(relative_filename, list->values[i], src, 4095);
+		relative(relative_filename, delete_list->values[i], src, 4095);
 
 		//get the full name of the file on the destination
 		char full_filename[4096];
@@ -415,131 +425,130 @@ int delete_phy(struct list *list, char *src, char *dest) {
 	return success;
 }
 
-int sync_phy(struct cache *cache, char *src, char *dest) {
-	int st_res;
-	struct stat st_info;
+int update_phy(char *src, char *dest) {
+	int success = 0;
 
-	char relative_filename[256];
-	memset(relative_filename, 0, 256);
-	filename(relative_filename, src, 255);
+	//loop through the list
+	for(size_t i = 0; i < update_list->length; i++) {
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, update_list->values[i], src, 4095);
 
-	//don't check the current directory or the parent directory
-	if(strcmp(relative_filename, ".") == 0 || strcmp(relative_filename, "..") == 0)
-		return 0;
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
 
-	struct filenode *filenode = get(cache, src);
-
-	//file is new
-	if(filenode == 0) {
-		if((r_fd = open(src, O_RDONLY)) < 0) {
-			fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
+		if((r_fd = open(update_list->values[i], O_RDONLY)) < 0) {
+			fprintf(stderr, "Error in physical update - Couldn't open file: %s\n", update_list->values[i]);
 			return -1;
 		}
-		
-		if((st_res = fstat(r_fd, &st_info)) < 0) {
-			fprintf(stderr, "Error in physical sync - Couldn't stat file: %s\n", src);
+
+		if((w_fd = open(full_filename, O_WRONLY | O_TRUNC)) < 0) {
+			fprintf(stderr, "Error in physical update - Couldn't open file: %s\n", full_filename);
 			close(r_fd);
 			return -1;
 		}
 
-		//close before recursion
+		//update the file in the destination
+		if(copy(w_fd, r_fd, 256) < 0) {
+			fprintf(stderr, "Error in physical update - Couldn't update file: %s -> %s\n", update_list->values[i], full_filename);
+			success = -1;
+		}
+		close(r_fd);
+		close(w_fd);
+	}
+	return success;
+}
+
+int insert_phy(char *src, char *dest) {
+	int success = 0;
+
+	//sort the list based on length
+	sortlen(insert_list, ascending);
+
+	//loop through the list looking at shorter filenames first
+	//this will ensure directories are inserted before subfiles
+	//and subdirectories
+	for(size_t i = 0; i < insert_list->length; i++) {
+		int st_res;
+		struct stat st_info;
+		
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, insert_list->values[i], src, 4095);
+
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
+
+		if((r_fd = open(insert_list->values[i], O_RDONLY)) < 0) {
+			fprintf(stderr, "Error in physical insert - Couldn't open file: %s\n", insert_list->values[i]);
+			return -1;
+		}
+
+		if((st_res = fstat(r_fd, &st_info)) < 0) {
+			fprintf(stderr, "Error in physical insert - Couldn't stat file: %s\n", insert_list->values[i]);
+			close(r_fd);
+			return -1;
+		}
+
 		close(r_fd);
 
 		if(S_ISDIR(st_info.st_mode)) {
-			if(mkdir(dest, st_info.st_mode) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't make directory: %s\n", dest);
-				return -1;
+			if(mkdir(full_filename, st_info.st_mode) < 0) {
+				fprintf(stderr, "Error in physical insert - Couldn't make directory: %s\n", full_filename);
 			}
 		}
-		else if(S_ISREG(st_info.st_mode)) {
-			if((r_fd = open(src, O_RDONLY)) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
+		else {
+			if((r_fd = open(insert_list->values[i], O_RDONLY)) < 0) {
+				fprintf(stderr, "Error in physical insert - Couldn't open file: %s\n", insert_list->values[i]);
 				return -1;
 			}
-			if((w_fd = open(dest, O_WRONLY | O_CREAT, st_info.st_mode)) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", dest);
+			if((w_fd = open(full_filename, O_WRONLY | O_CREAT, st_info.st_mode)) < 0) {
+				fprintf(stderr, "Error in physical insert - Couldn't open file: %s\n", full_filename);
 				close(r_fd);
 				return -1;
 			}
 
-			//copy file 256 bytes at a time, checking for errors
+			//update the file in the destination
 			if(copy(w_fd, r_fd, 256) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't copy files: %s -> %s\n", src, dest);
-				close(r_fd);
-				close(w_fd);
-				return -1;
+				fprintf(stderr, "Error in physical insert - Couldn't update file: %s -> %s\n", insert_list->values[i], full_filename);
+				success = -1;
 			}
 			close(r_fd);
 			close(w_fd);
 		}
+		
 	}
-	//file already exists (check for potential change)
-	else {
-		if((r_fd = open(src, O_RDONLY)) < 0) {
-			fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
-			return -1;
-		}
+	return success;
+}
 
-		if((st_res = fstat(r_fd, &st_info)) < 0) {
-			fprintf(stderr, "Error in physical sync - Couldn't stat file: %s\n", src);
-			close(r_fd);
-			return -1;
-		}
+int sync_phy(char *src, char *dest) {
+	int success = 0;
 
-		//close before recursion
-		close(r_fd);
-
-		if((st_info.st_size != filenode->size || st_info.st_mtime != filenode->last_modify_time) && S_ISREG(st_info.st_mode)) {
-			if((r_fd = open(src, O_RDONLY)) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", src);
-				return -1;
-			}
-			if((w_fd = open(dest, O_WRONLY | O_TRUNC)) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't open file: %s\n", dest);
-				close(r_fd);
-				return -1;
-			}
-
-			//copy file 256 bytes at a time, checking for errors
-			if(copy(w_fd, r_fd, 256) < 0) {
-				fprintf(stderr, "Error in physical sync - Couldn't copy files: %s -> %s\n", src, dest);
-				close(r_fd);
-				close(w_fd);
-				return -1;
-			}
-			close(r_fd);
-			close(w_fd);
-		}
+	//insert all new files first
+	if(insert_phy(src, dest) < 0) {
+		fprintf(stderr, "Error in physical sync - Couldn't insert file: %s -> %s\n", src, dest);
+		success = -1;
 	}
 
-	//recurse to the next level
-	if(S_ISDIR(st_info.st_mode)) {
-		DIR *dp;
-		struct dirent *ep;
-
-		dp = opendir(src);
-		if(dp != 0) {
-			while((ep = readdir(dp)) != 0) {
-				//get the full path
-				char srcbuf[4096], destbuf[4096];
-				memset(srcbuf, 0, 4096);
-				memset(destbuf, 0, 4096);
-				join(srcbuf, src, ep->d_name, 4095);
-				join(destbuf, dest, ep->d_name, 4095);
-
-				//try to sync the directory recursively,
-				//if it fails, fail all the way up
-				if(sync_phy(cache, srcbuf, destbuf) < 0) {
-					closedir(dp);
-					return -1;
-				}
-			}
-			closedir(dp);
-		}
+	//update any existing files second
+	if(update_phy(src, dest) < 0) {
+		fprintf(stderr, "Error in physical sync - Couldn't udpate file: %s -> %s\n", src, dest);
+		success = -1;
 	}
 
-	//success
-	return 0;
+	//delete any files last
+	if(delete_phy(src, dest) < 0) {
+		fprintf(stderr, "Error in physical sync - Couldn't delete file: %s -> %s\n", src, dest);
+		success = -1;
+	}
+
+	return success;
 }
 
 void cleanup() {
@@ -547,7 +556,9 @@ void cleanup() {
 
 	//free up allocated memory
 	free_cache(cache);
-	free_list(list);
+	free_list(insert_list);
+	free_list(update_list);
+	free_list(delete_list);
 
 	//close read file descriptor
 	if(r_fd != -1 && fcntl(r_fd, F_GETFL) >= 0)	
@@ -563,14 +574,4 @@ void cleanup() {
 void handle_signal(int sig) {
 	cleanup(); //clean up
 	exit(0); //exit gracefully
-}
-
-void print_filenode(struct filenode *filenode) {
-	printf("File Name: %s\n", filenode->filename);
-	printf("Last Modified: %ld\n", filenode->last_modify_time);
-	printf("Size: %ld\n", filenode->size);
-	if(filenode->type == FILE_TYPE_DIR)
-		printf("File type: DIR\n");
-	else if(filenode->type == FILE_TYPE_FILE)
-		printf("File Type: FILE\n");
 }
