@@ -24,6 +24,11 @@ void filename(char *result, char *path, size_t maxlen);
 void relative(char *result, char *path, char *parent, size_t maxlen);
 
 /*
+ * Get the parent directory of a full path
+ */
+void parent(char *result, char *path, size_t maxlen);
+
+/*
  * Copy the file stored at the r_fd file descriptor to the file
  * stored at the w_fd descriptor
  */

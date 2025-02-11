@@ -31,6 +31,9 @@ $(OBJ)/cache.o: $(SRC)/cache.c | $(OBJ)
 $(OBJ)/list.o: $(SRC)/list.c | $(OBJ)
 	$(CC) $(CFLAGS) -c -o $@ $< 
 
+$(OBJ)/client.o: $(SRC)/client.c | $(OBJ)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(OBJ):
 	mkdir -p $@
 

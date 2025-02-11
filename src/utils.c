@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <stdio.h>
+
 #include "utils.h"
 
 void join(char *dest, char *src1, char *src2, size_t maxlen) {
@@ -76,6 +78,29 @@ void relative(char *result, char *path, char *parent, size_t maxlen) {
 	char *dest = result;
 	j = 0;
 	for(char *src = path + i; *src != 0 && j < maxlen; src++, j++)
+		*dest++ = *src;
+}
+
+void parent(char *result, char *path, size_t maxlen) {
+	//index of the last slash in the path name
+	size_t last_slash = -1;
+	size_t i = 0;
+
+	//get the last slash index
+	for(char *ptr = path; *ptr != 0; ptr++, i++) {
+		if(*ptr == '/')
+			last_slash = i;
+	}
+
+
+	//no parent directory, copy path into result
+	if(last_slash == -1)
+		last_slash = i;
+
+	//copy everything up to the last slash into result
+	char *dest = result;
+	i = 0;
+	for(char *src = path; *src != 0 && i < maxlen && i < last_slash; src++, i++)
 		*dest++ = *src;
 }
 
