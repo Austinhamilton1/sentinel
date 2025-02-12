@@ -77,6 +77,18 @@ int ftp_rm(struct ftp_connection *conn, char *path);
 int ftp_cp(struct ftp_connection *conn, char *src, char *dest);
 
 /*
+ * Check if a file exists on the server
+ * Returns 0 if the file exists, -1 otherwise
+ */
+int ftp_file_exists(struct ftp_connection *conn, char *path);
+
+/*
+ * Check if a directory exists on the server
+ * Returns 0 if the file exists, -1 otherwise
+ */
+int ftp_directory_exists(struct ftp_connection *conn, char *path);
+
+/*
  * Close an ftp connection
  */
 void ftp_close(struct ftp_connection *conn);

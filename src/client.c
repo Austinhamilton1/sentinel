@@ -179,7 +179,6 @@ int ftp_init_data(struct ftp_connection *conn) {
 
     //needed for moving forward
     char *rest = response;
-    char *token;
     int h1, h2, h3, h4, p1, p2;
 
     if(check_status(&rest, 227) < 0) {
@@ -440,7 +439,6 @@ int ftp_cd(struct ftp_connection *conn, char *path) {
     //check the results of the command
     char *rest = response;
     if(check_status(&rest, 250) < 0) {
-        fprintf(stderr, "Failed to change directory to %s.\n", path);
         return -1;
     }
 
@@ -515,7 +513,7 @@ int ftp_cp(struct ftp_connection *conn, char *src, char *dest) {
     //check the response
     char *rest = response;
     if(check_status(&rest, 150) < 0) {
-        fprintf(stderr, "Failed to copy file: %s.\n", relative_filename);
+        fprintf(stderr, "Failed to intiate copy file: %s.\n", relative_filename);
         return -1;
     }
 
@@ -539,6 +537,69 @@ int ftp_cp(struct ftp_connection *conn, char *src, char *dest) {
         send(conn->data_conn, buf, strlen(buf), 0);
         memset(buf, 0, sizeof(buf));
     }
+
+    close(conn->data_conn);
+    conn->data_open = 0;
+
+    //get the response of the server
+    memset(response, 0, sizeof(response));
+    if(read(conn->control_conn, response, sizeof(response) - 1) < 0) {
+        fprintf(stderr, "Failed to read response of STOR command\n");
+        return -1;
+    }
+
+    rest = response;
+    if(check_status(&rest, 226) < 0) {
+        fprintf(stderr, "Failed to copy file: %s\n", relative_filename);
+        return -1;
+    }
+
+    return 0;
+}
+
+int ftp_file_exists(struct ftp_connection *conn, char *path) {
+    //check the control connection
+    if(conn->control_open == 0) {
+        fprintf(stderr, "Invalid connection. Control connection is closed.\n");
+        return -1;
+    }
+
+    //initialize command data
+    char commandbuf[4096], response[1024];
+    memset(commandbuf, 0, 4096);
+    memset(response, 0, 1024);
+
+    //create command
+    snprintf(commandbuf, sizeof(commandbuf) - 1, "SIZE %s\r\n", path);
+
+    send(conn->control_conn, commandbuf, strlen(commandbuf), 0);
+    if(read(conn->control_conn, response, sizeof(response) - 1) < 0) {
+        fprintf(stderr, "Could not read response from SIZE command.\n");
+        return -1;
+    }
+
+    //check if the file exists
+    char *rest = response;
+    if(check_status(&rest, 550) == 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int ftp_directory_exists(struct ftp_connection *conn, char *path) {
+    //save the state of the system
+    char cwd[4096];
+    memset(cwd, 0, sizeof(cwd));
+    ftp_pwd(conn, cwd);
+    
+    //try to change the directory to the path
+    if(ftp_cd(conn, path) < 0) {
+        return -1;
+    }
+
+    //restore state
+    ftp_cd(conn, cwd);
 
     return 0;
 }

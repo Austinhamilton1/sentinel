@@ -10,6 +10,7 @@
 #include "cache.h"
 #include "list.h"
 #include "utils.h"
+#include "client.h"
 
 /*
  * Build a cache from a path
@@ -31,19 +32,34 @@ int update_cache(char *path);
 void clean_cache();
 
 /*
- * Migrate a src to a destination on the same physical filesystem
+ * Migrate a source to a destination on the same physical filesystem
  */
 int migrate_phy(char *src, char *dest);
 
 /*
- * Delete any files on dest that were deleted in src
+ * Migrate a source to a destination over FTP
+ */
+int migrate_ftp(char *src, char *dest);
+
+/*
+ * Delete any files on dest that were deleted in src (Same filesystem)
  */
 int delete_phy(char *src, char *dest);
+
+/*
+ * Delete any files on dest that were deleted in src (FTP)
+ */
+int delete_ftp(char *src, char *dest);
 
 /*
  * Synchronize two folders on the same physical filesystem
  */
 int sync_phy(char *src, char *dest);
+
+/*
+ * Synchronize two folders over FTP
+ */
+int sync_ftp(char *src, char *dest);
 
 /*
  * Frees all used memory and file descriptors
@@ -60,11 +76,12 @@ struct cache *cache = 0;
 struct list *insert_list = 0;
 struct list *delete_list = 0;
 struct list *update_list = 0;
+struct ftp_connection *conn = 0;
 int r_fd, w_fd = -1;
 
 int main(int argc, char *argv[]) {
-	if(argc != 3) {
-		printf("Usage: sentinel [src_path] [dest_path]\n");
+	if(argc < 4) {
+		fprintf(stderr, "Usage: sentinel [type {fs|ftp}] [src_path] [dest_path] [:hostname] [:port] [:username] [:password]\n");
 		return -1;
 	}
 
@@ -76,10 +93,48 @@ int main(int argc, char *argv[]) {
 	insert_list = init_list(400);
 	delete_list = init_list(400);
 	update_list = init_list(400);
+	
+	//if we need an ftp_connection use this one
+	struct ftp_connection ftp;
+
+	int (*migrate)(char *, char *);
+	int (*sync)(char*, char*);
+
+	//fs means same filesystem
+	//ftp is over FTP
+	char *type = argv[1];
+	if(strcmp(type, "fs") == 0) {
+		//only need to set the migrate and sync functions
+		migrate = &migrate_phy;
+		sync = &sync_phy;
+	}
+	else if(strcmp(type, "ftp") == 0) {
+		//set the migrate and sync functions and set the connection
+		migrate = &migrate_ftp;
+		sync = &sync_ftp;
+		conn = &ftp;
+
+		//initialize the connection
+		if(ftp_connect(conn, argv[4], atoi(argv[5])) < 0) {
+			fprintf(stderr, "Failed to connect to FTP server.\n");
+			cleanup();
+			return -1;
+		}
+		if(ftp_auth(conn, argv[6], argv[7]) < 0) {
+			fprintf(stderr, "Failed to authenticate user: %s with password: %s\n", argv[6], argv[7]);
+			cleanup();
+			return -1;
+		}
+	}
+	else {
+		fprintf(stderr, "Usage: sentinel [type {fs|ftp}] [src_path] [dest_path] [:hostname] [:port] [:username] [:password]\n");
+		cleanup();
+		return -1;
+	}
 
 	printf("Building cache...");
 	//try to build the cache
-	if(build_cache(argv[1]) < 0) {
+	if(build_cache(argv[2]) < 0) {
 		printf("Failed.\n");
 		cleanup();
 		return -1;
@@ -87,7 +142,7 @@ int main(int argc, char *argv[]) {
 	printf("OK.\n");
 
 	printf("Migrating files...");
-	if(migrate_phy(argv[1], argv[2]) < 0) {
+	if(migrate(argv[2], argv[3]) < 0) {
 		printf("Failed.\n");
 		cleanup();
 		return -1;
@@ -95,13 +150,22 @@ int main(int argc, char *argv[]) {
 
 	printf("OK.\n");
 	
+	//event loop
 	while(1) {
+		//clean and update the cache
 		clean_cache();
-		if(update_cache(argv[1]) < 0)
+		if(update_cache(argv[2]) < 0)
 			fprintf(stderr, "Update failed.\n");
+		
+		//this is necessary since linux file modification times
+		//are stored in seconds (we don't want to skip an update!)
 		sleep(1);
-		if(sync_phy(argv[1], argv[2]) < 0)
+
+		//sync the files
+		if(sync(argv[2], argv[3]) < 0)
 			fprintf(stderr, "Sync failed.\n");
+		
+		//clear the sync lists
 		clear(insert_list);
 		clear(delete_list);
 		clear(update_list);
@@ -343,7 +407,10 @@ int migrate_phy(char *src, char *dest) {
 	//directory
 	if(S_ISDIR(st_info.st_mode)) {
 		if(access(dest, F_OK) < 0) {
-			mkdir(dest, st_info.st_mode);
+			if(mkdir(dest, st_info.st_mode) < 0) {
+				fprintf(stderr, "Error in physical migration - Could not create directory: %s\n", dest);
+				return -1;
+			}
 		}
 
 		DIR *dp;
@@ -396,6 +463,87 @@ int migrate_phy(char *src, char *dest) {
 	return 0;
 }
 
+int migrate_ftp(char *src, char *dest) {
+	int st_res;
+	struct stat st_info;
+
+	char relative_filename[256];
+	memset(relative_filename, 0, 256);
+	filename(relative_filename, src, 255);
+
+	//don't check the current directory or the parent directory
+	if(strcmp(relative_filename, ".") == 0 || strcmp(relative_filename, "..") == 0)
+		return 0;
+
+	if((r_fd = open(src, O_RDONLY)) < 0) {
+		fprintf(stderr, "Error in FTP migration- Couldn't open file: %s\n", src);
+		return -1;
+	}
+
+	if((st_res = fstat(r_fd, &st_info)) < 0) {
+		fprintf(stderr, "Error in FTP migration - Could not stat file: %s\n", src);
+		close(r_fd);
+		return -1;
+	}
+
+	//close before recursion
+	close(r_fd);
+
+	//directory
+	if(S_ISDIR(st_info.st_mode)) {
+		if(ftp_directory_exists(conn, dest) < 0) {
+			if(ftp_mkdir(conn, dest) < 0) {
+				fprintf(stderr, "Error in FTP migration - Couldn't create directory: %s\n", dest);
+				return -1;
+			}
+		}
+
+		DIR *dp;
+		struct dirent *ep;
+
+		dp = opendir(src);
+		if(dp != 0) {
+			while((ep = readdir(dp)) != 0) {
+				//get the full path
+				char srcbuf[4096], destbuf[4096];
+				memset(srcbuf, 0, 4096);
+				memset(destbuf, 0, 4096);
+				join(srcbuf, src, ep->d_name, 4095);
+				join(destbuf, dest, ep->d_name, 4095);
+
+				//try to migrate the directory recursively,
+				//if it fails, fail all the way up
+				if(migrate_ftp(srcbuf, destbuf) < 0) {
+					closedir(dp);
+					return -1;
+				}
+			}
+			closedir(dp);
+		}
+	}
+	//regular file (make sure it doesn't already exist so it doesn't write over existing data in the project)
+	else if(S_ISREG(st_info.st_mode) && ftp_file_exists(conn, dest) < 0) {
+		//copy source to destination
+		char parent_folder[4096];
+		memset(parent_folder, 0, sizeof(parent_folder));
+		parent(parent_folder, dest, sizeof(parent_folder) - 1);
+
+		//open the data connection
+		if(ftp_init_data(conn) < 0) {
+			fprintf(stderr, "Error in FTP migration - Couldn't initialize data connection.\n");
+			return -1;
+		}
+
+		//upload the file
+		if(ftp_cp(conn, src, parent_folder) < 0) {
+			fprintf(stderr, "Error in FTP migration - Could not copy files: %s -> %s\n", src, dest);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 int delete_phy(char *src, char *dest) {
 	int success = 0;
 
@@ -422,6 +570,46 @@ int delete_phy(char *src, char *dest) {
 			success = -1;
 		}
 	}
+
+	return success;
+}
+
+int delete_ftp(char *src, char *dest) {
+	int success = 0;
+
+	//sort list based on length
+	sortlen(delete_list, descending);
+
+	//loop through the list looking at longer filenames first
+	//this will ensure subfiles and subdirectories
+	//get deleted before parent directories
+	for(size_t i = 0; i < delete_list->length; i++) {
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, delete_list->values[i], src, 4095);
+
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
+
+		if(ftp_directory_exists(conn, full_filename) == 0) {
+			//delete the folder from the destination
+			if(ftp_rmdir(conn, full_filename) < 0) {
+				fprintf(stderr, "Error in FTP delete - Couldn't remove directory: %s\n", full_filename);
+				success = -1;
+			}
+		}
+		else {
+			//delete the file from the destination
+			if(ftp_rm(conn, full_filename) < 0) {
+				fprintf(stderr, "Error in FTP delete - Couldn't remove file: %s\n", full_filename);
+				success = -1;
+			}
+		}
+	}
+
 	return success;
 }
 
@@ -459,6 +647,38 @@ int update_phy(char *src, char *dest) {
 		close(r_fd);
 		close(w_fd);
 	}
+
+	return success;
+}
+
+int update_ftp(char *src, char *dest) {
+	int success = 0;
+
+	//loop through the list
+	for(size_t i = 0; i < update_list->length; i++) {
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, update_list->values[i], src, 4095);
+
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
+
+		//open the data connection
+		if(ftp_init_data(conn) < 0) {
+			fprintf(stderr, "Error in FTP update: Couldn't initialize data connection\n");
+			return -1;
+		}
+
+		//update the file
+		if(ftp_cp(conn, update_list->values[i], dest) < 0) {
+			fprintf(stderr, "Error in FTP update: Couldn't copy file: %s -> %s\n", update_list->values[i], full_filename);
+			success = -1;
+		}
+	}
+	
 	return success;
 }
 
@@ -501,6 +721,7 @@ int insert_phy(char *src, char *dest) {
 		if(S_ISDIR(st_info.st_mode)) {
 			if(mkdir(full_filename, st_info.st_mode) < 0) {
 				fprintf(stderr, "Error in physical insert - Couldn't make directory: %s\n", full_filename);
+				success = -1;
 			}
 		}
 		else {
@@ -524,6 +745,67 @@ int insert_phy(char *src, char *dest) {
 		}
 		
 	}
+
+	return success;
+}
+
+int insert_ftp(char *src, char *dest) {
+	int success = 0;
+
+	//sort the list based on length
+	sortlen(insert_list, ascending);
+
+	//loop through the list looking at shorter filenames first
+	//this will ensure directories are inserted before subfiles
+	//and subdirectories
+	for(size_t i = 0; i < insert_list->length; i++) {
+		int st_res;
+		struct stat st_info;
+		
+		//get the relative file name
+		char relative_filename[4096];
+		memset(relative_filename, 0, 4096);
+		relative(relative_filename, insert_list->values[i], src, 4095);
+
+		//get the full name of the file on the destination
+		char full_filename[4096];
+		memset(full_filename, 0, 4096);
+		join(full_filename, dest, relative_filename, 4095);
+
+		if((r_fd = open(insert_list->values[i], O_RDONLY)) < 0) {
+			fprintf(stderr, "Error in FTP insert - Couldn't open file: %s\n", insert_list->values[i]);
+			return -1;
+		}
+
+		if((st_res = fstat(r_fd, &st_info)) < 0) {
+			fprintf(stderr, "Error in FTP insert - Couldn't stat file: %s\n", insert_list->values[i]);
+			close(r_fd);
+			return -1;
+		}
+
+		close(r_fd);
+
+		if(S_ISDIR(st_info.st_mode)) {
+			if(ftp_mkdir(conn, full_filename) < 0) {
+				fprintf(stderr, "Error in FTP insert - Couldn't make directory: %s\n", full_filename);
+				success = -1;
+			}
+		}
+		else {
+			//open up the data connection
+			if(ftp_init_data(conn) < 0) {
+				fprintf(stderr, "Error in FTP insert - Couldn't initialize data connection\n");
+				return -1;
+			}
+			//update the file in the destination
+			if(ftp_cp(conn, insert_list->values[i], dest) < 0) {
+				fprintf(stderr, "Error in FTP insert - Couldn't update file: %s -> %s\n", insert_list->values[i], full_filename);
+				success = -1;
+			}
+		}
+		
+	}
+	
 	return success;
 }
 
@@ -551,6 +833,30 @@ int sync_phy(char *src, char *dest) {
 	return success;
 }
 
+int sync_ftp(char *src, char *dest) {
+	int success = 0;
+
+	//insert all new files first
+	if(insert_ftp(src, dest) < 0) {
+		fprintf(stderr, "Error in FTP sync - Couldn't insert file: %s -> %s\n", src, dest);
+		success = -1;
+	}
+
+	//update any existing files second
+	if(update_ftp(src, dest) < 0) {
+		fprintf(stderr, "Error in FTP sync - Couldn't udpate file: %s -> %s\n", src, dest);
+		success = -1;
+	}
+
+	//delete any files last
+	if(delete_ftp(src, dest) < 0) {
+		fprintf(stderr, "Error in FTP sync - Couldn't delete file: %s -> %s\n", src, dest);
+		success = -1;
+	}
+
+	return success;
+}
+
 void cleanup() {
 	printf("Stopping...");
 
@@ -559,6 +865,11 @@ void cleanup() {
 	free_list(insert_list);
 	free_list(update_list);
 	free_list(delete_list);
+
+	//close up FTP connection
+	if(conn != 0) {
+		ftp_close(conn);
+	}
 
 	//close read file descriptor
 	if(r_fd != -1 && fcntl(r_fd, F_GETFL) >= 0)	
