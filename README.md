@@ -12,17 +12,14 @@ The sentinel package is an application for developers. It allows for a more seam
 * ~~Create way to store state of source code~~
 * ~~Create main event loop~~
 * Create way to determine which type of connection
-	* Same physical filesystem
-	* FTP
+	* ~~Same physical filesystem~~
+	* ~~FTP~~
 	* SFTP
-	* SSH
 * Create way to connect to remote destination
     * ~~Same physical filesystem~~ 
-    * FTP
-	* SFTP
+    * ~~FTP~~
 	* SSH
 * Update destination when there is a change to source code
 	* ~~Same physical filesystem~~
-	* FTP
+	* ~~FTP~~
 	* SFTP
-	* SSH
