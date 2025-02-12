@@ -53,12 +53,6 @@ int ftp_mkdir(struct ftp_connection *conn, char *path);
 int ftp_rmdir(struct ftp_connection *conn, char *path);
 
 /*
- * List out the files in a directory on the ftp server
- * Returns 0 on success or -1 on failure
- */
-int ftp_ls(struct ftp_connection *conn, struct list *list, char *path);
-
-/*
  * Change directories on the server
  * Returns 0 on success or -1 on failure
  */
